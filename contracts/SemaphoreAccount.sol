@@ -85,7 +85,7 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
     internal override virtual returns (uint256 validationData) {
         
         // Always ok
-        return 0;
+        return 1;
     }
 
     function _call(address target, uint256 value, bytes memory data) internal {

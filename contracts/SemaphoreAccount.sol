@@ -5,18 +5,25 @@ pragma solidity ^0.8.12;
 /* solhint-disable no-inline-assembly */
 /* solhint-disable reason-string */
 
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@account-abstraction/contracts/core/BaseAccount.sol";
-
+import "./semaphore/Semaphore.sol";
+import "./semaphore/interfaces/ISemaphoreVerifier.sol";
 
 contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
     address public owner;
 
+    Semaphore public semaphore;
+
+    uint256 public groupId;
+
     IEntryPoint private immutable _entryPoint;
 
-    event SemaphoreAccountInitialized(IEntryPoint indexed entryPoint, address indexed owner);
+    event SemaphoreAccountInitialized(
+        IEntryPoint indexed entryPoint,
+        address indexed owner
+    );
 
     modifier onlyOwner() {
         _onlyOwner();
@@ -28,24 +35,30 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         return _entryPoint;
     }
 
-
     // solhint-disable-next-line no-empty-blocks
     receive() external payable {}
 
     constructor(IEntryPoint anEntryPoint) {
         _entryPoint = anEntryPoint;
-        _disableInitializers();
+        // _disableInitializers();
     }
 
     function _onlyOwner() internal view {
         //directly from EOA owner, or through the account itself (which gets redirected through execute())
-        require(msg.sender == owner || msg.sender == address(this), "only owner");
+        require(
+            msg.sender == owner || msg.sender == address(this),
+            "only owner"
+        );
     }
 
     /**
      * execute a transaction (called directly from owner, or by entryPoint)
      */
-    function execute(address dest, uint256 value, bytes calldata func) external {
+    function execute(
+        address dest,
+        uint256 value,
+        bytes calldata func
+    ) external {
         _requireFromEntryPointOrOwner();
         _call(dest, value, func);
     }
@@ -53,7 +66,10 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
     /**
      * execute a sequence of transactions
      */
-    function executeBatch(address[] calldata dest, bytes[] calldata func) external {
+    function executeBatch(
+        address[] calldata dest,
+        bytes[] calldata func
+    ) external {
         _requireFromEntryPointOrOwner();
         require(dest.length == func.length, "wrong array lengths");
         for (uint256 i = 0; i < dest.length; i++) {
@@ -64,10 +80,16 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
     /**
      * @dev The _entryPoint member is immutable, to reduce gas consumption.  To upgrade EntryPoint,
      * a new implementation of SemaphoreAccount must be deployed with the new EntryPoint address, then upgrading
-      * the implementation by calling `upgradeTo()`
+     * the implementation by calling `upgradeTo()`
      */
-    function initialize(address anOwner) public virtual initializer {
+    function initialize(
+        address anOwner,
+        address _semaphoreAddress,
+        uint256 _groupId
+    ) public virtual initializer {
         _initialize(anOwner);
+        groupId = _groupId;
+        semaphore = Semaphore(_semaphoreAddress);
     }
 
     function _initialize(address anOwner) internal virtual {
@@ -77,19 +99,46 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
 
     // Require the function call went through EntryPoint or owner
     function _requireFromEntryPointOrOwner() internal view {
-        require(msg.sender == address(entryPoint()) || msg.sender == owner, "account: not Owner or EntryPoint");
+        require(
+            msg.sender == address(entryPoint()) || msg.sender == owner,
+            "account: not Owner or EntryPoint"
+        );
     }
 
     /// implement template method of BaseAccount
-    function _validateSignature(UserOperation calldata userOp, bytes32 userOpHash)
-    internal override virtual returns (uint256 validationData) {
-        
-        // Always ok
-        return 1;
+    function _validateSignature(
+        UserOperation calldata userOp,
+        bytes32 userOpHash
+    ) internal virtual override returns (uint256 validationData) {
+        uint256 merkleTreeRoot = semaphore.getMerkleTreeRoot(groupId);
+        uint256 merkleTreeDepth = semaphore.getMerkleTreeDepth(groupId);
+
+        (uint256[8] memory proof, uint256 nullifierHash) = abi.decode(
+            userOp.signature,
+            (uint256[8], uint256)
+        );
+        uint256 signal = uint256(userOpHash);
+
+        try
+            ISemaphoreVerifier(semaphore.verifier()).verifyProof(
+                merkleTreeRoot,
+                nullifierHash,
+                signal, // Signal
+                0, // External nullifier
+                proof,
+                merkleTreeDepth
+            )
+        {
+            return 0;
+        } catch Error(string memory reason) {
+            return 1;
+        } catch (bytes memory reason) {
+            return 1;
+        }
     }
 
     function _call(address target, uint256 value, bytes memory data) internal {
-        (bool success, bytes memory result) = target.call{value : value}(data);
+        (bool success, bytes memory result) = target.call{value: value}(data);
         if (!success) {
             assembly {
                 revert(add(result, 32), mload(result))
@@ -108,7 +157,7 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
      * deposit more funds for this account in the entryPoint
      */
     function addDeposit() public payable {
-        entryPoint().depositTo{value : msg.value}(address(this));
+        entryPoint().depositTo{value: msg.value}(address(this));
     }
 
     /**
@@ -116,13 +165,17 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
      * @param withdrawAddress target to send to
      * @param amount to withdraw
      */
-    function withdrawDepositTo(address payable withdrawAddress, uint256 amount) public onlyOwner {
+    function withdrawDepositTo(
+        address payable withdrawAddress,
+        uint256 amount
+    ) public onlyOwner {
         entryPoint().withdrawTo(withdrawAddress, amount);
     }
 
-    function _authorizeUpgrade(address newImplementation) internal view override {
+    function _authorizeUpgrade(
+        address newImplementation
+    ) internal view override {
         (newImplementation);
         _onlyOwner();
     }
 }
-

@@ -1,12 +1,25 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { BigNumberish, BytesLike } from "ethers";
+import { ethers, run } from "hardhat";
+import { BigNumber, BigNumberish, BytesLike } from "ethers";
+import { Identity } from "@semaphore-protocol/identity";
+import { Group } from "@semaphore-protocol/group";
 import {
   ERC1967Proxy__factory,
   SemaphoreAccount,
   SemaphoreAccount__factory,
+  Semaphore,
+  SemaphoreAccountFactory,
+  SemaphoreAccountFactory__factory,
 } from "../types";
-import { defaultAbiCoder, keccak256, parseEther } from "ethers/lib/utils";
+import {
+  AbiCoder,
+  arrayify,
+  concat,
+  defaultAbiCoder,
+  keccak256,
+  parseEther,
+} from "ethers/lib/utils";
+import { generateProof } from "@semaphore-protocol/proof";
 
 interface UserOperation {
   sender: string;
@@ -126,32 +139,41 @@ function getUserOpHash(
 // });
 
 describe("#validateUserOp", () => {
+  let accounts: string[];
   let account: SemaphoreAccount;
   let userOp: UserOperation;
   let userOpHash: string;
   let preBalance: number;
   let expectedPay: number;
+  let semaphoreContract: Semaphore;
 
   const actualGasPrice = 1e9;
   // for testing directly validateUserOp, we initialize the account with EOA as entryPoint.
   let entryPointEoa: string;
 
+  const wasmFilePath = `snark-artifacts/semaphore.wasm`;
+  const zkeyFilePath = `snark-artifacts/semaphore.zkey`;
+
   before(async () => {
-    const accounts = await ethers.provider.listAccounts();
+    accounts = await ethers.provider.listAccounts();
     const ethersSigner = await ethers.getSigner(accounts[0]);
+
+    ({ semaphore: semaphoreContract } = (await run("deploy:semaphore")) as {
+      semaphore: Semaphore;
+    });
 
     entryPointEoa = accounts[2];
     const epAsSigner = await ethers.getSigner(entryPointEoa);
 
-    // cant use "SimpleAccountFactory", since it attempts to increment nonce first
-    const implementation = await new SemaphoreAccount__factory(
+    const factoryContract = await new SemaphoreAccountFactory__factory(
       ethersSigner
-    ).deploy(entryPointEoa);
-    const proxy = await new ERC1967Proxy__factory(ethersSigner).deploy(
-      implementation.address,
-      "0x"
-    );
-    account = SemaphoreAccount__factory.connect(proxy.address, epAsSigner);
+    ).deploy(entryPointEoa, semaphoreContract.address);
+
+    const add = await factoryContract.getAddress(accounts[3], 2023, 100);
+
+    await factoryContract.createAccount(accounts[3], 2023, 100);
+
+    account = SemaphoreAccount__factory.connect(add, epAsSigner);
 
     await ethersSigner.sendTransaction({
       from: accounts[0],
@@ -180,28 +202,55 @@ describe("#validateUserOp", () => {
     };
 
     userOpHash = await getUserOpHash(userOp, entryPointEoa, chainId);
-
-    expectedPay = actualGasPrice * (callGasLimit + verificationGasLimit);
-
-    preBalance = parseInt(
-      (await ethers.provider.getBalance(account.address)).toString()
-    );
-
-    const ret = await account.validateUserOp(userOp, userOpHash, expectedPay, {
-      gasPrice: actualGasPrice,
-    });
-
-    await ret.wait();
   });
 
-  it("should return NO_SIG_VALIDATION on wrong signature", async () => {
-    const userOpHash = ethers.constants.HashZero;
+  it("should verify signature for valid semaphore proof", async () => {
+    // Generate new semaphore identity
+    const identity = new Identity();
+
+    // Create new semaphore on-chain group
+    const groupId = 2023;
+    await semaphoreContract["createGroup(uint256,uint256,address)"](
+      groupId,
+      20, // tree depth
+      accounts[0]
+    );
+
+    // Add member to semaphore group on-chain
+    await semaphoreContract.addMember(2023, identity.commitment);
+
+    // Construct a local copy of same group
+    const group = new Group(groupId, 20, [identity.commitment]);
+
+    // Generate proof of membership
+    const userOpHash = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    const externalNullifier = 0; // Not needed
+    const signal = userOpHash; // Hash of UserOperation is the signal
+
+    const fullProof = await generateProof(
+      identity,
+      group,
+      externalNullifier,
+      signal,
+      {
+        wasmFilePath,
+        zkeyFilePath,
+      }
+    );
+    console.log("merkleTreeRoot", fullProof.merkleTreeRoot);
+    console.log("fullProof", fullProof);
+
+    const signature = defaultAbiCoder.encode(
+      ["uint256[8]", "uint256"],
+      [fullProof.proof, fullProof.nullifierHash]
+    );
+
     const returnValue = await account.callStatic.validateUserOp(
-      { ...userOp, nonce: 1, signature: '0x01' },
-      userOpHash,
+      { ...userOp, nonce: 1, signature },
+      userOpHash.toString(),
       0
     );
 
-    expect(returnValue.toNumber()).to.eq(1);
+    expect(returnValue.toNumber()).to.eq(0);
   });
 });

@@ -30,12 +30,10 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         _;
     }
 
-    /// @inheritdoc BaseAccount
     function entryPoint() public view virtual override returns (IEntryPoint) {
         return _entryPoint;
     }
 
-    // solhint-disable-next-line no-empty-blocks
     receive() external payable {}
 
     constructor(IEntryPoint anEntryPoint) {
@@ -51,9 +49,6 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         );
     }
 
-    /**
-     * execute a transaction (called directly from owner, or by entryPoint)
-     */
     function execute(
         address dest,
         uint256 value,
@@ -63,9 +58,6 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         _call(dest, value, func);
     }
 
-    /**
-     * execute a sequence of transactions
-     */
     function executeBatch(
         address[] calldata dest,
         bytes[] calldata func
@@ -77,11 +69,6 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         }
     }
 
-    /**
-     * @dev The _entryPoint member is immutable, to reduce gas consumption.  To upgrade EntryPoint,
-     * a new implementation of SemaphoreAccount must be deployed with the new EntryPoint address, then upgrading
-     * the implementation by calling `upgradeTo()`
-     */
     function initialize(
         address anOwner,
         address _semaphoreAddress,
@@ -97,7 +84,6 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         emit SemaphoreAccountInitialized(_entryPoint, owner);
     }
 
-    // Require the function call went through EntryPoint or owner
     function _requireFromEntryPointOrOwner() internal view {
         require(
             msg.sender == address(entryPoint()) || msg.sender == owner,
@@ -105,7 +91,6 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         );
     }
 
-    /// implement template method of BaseAccount
     function _validateSignature(
         UserOperation calldata userOp,
         bytes32 userOpHash
@@ -129,7 +114,7 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
                 merkleTreeDepth
             )
         {
-            return 0;
+            return 0; // 0 returned means signature valid as per 4337
         } catch Error(string memory reason) {
             return 1;
         } catch (bytes memory reason) {

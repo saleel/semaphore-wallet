@@ -11,13 +11,14 @@ import {
 import { defaultAbiCoder, parseEther } from "ethers/lib/utils";
 import { generateProof } from "@semaphore-protocol/proof";
 import { UserOperation, getUserOpHash } from "./helpers";
+import { Signer } from "ethers";
 
-describe("#validateUserOp", () => {
+describe("#validateSignature", () => {
   let accounts: string[];
   let account: SemaphoreAccount;
-  let userOp: UserOperation;
   let userOpHash: string;
   let semaphoreContract: Semaphore;
+  let ethersSigner: Signer;
 
   // for testing directly validateUserOp, we initialize the account with EOA as entryPoint.
   let entryPointEoa: string;
@@ -27,30 +28,33 @@ describe("#validateUserOp", () => {
 
   before(async () => {
     accounts = await ethers.provider.listAccounts();
-    const ethersSigner = await ethers.getSigner(accounts[0]);
+    ethersSigner = await ethers.getSigner(accounts[0]);
 
     ({ semaphore: semaphoreContract } = (await run("deploy:semaphore")) as {
       semaphore: Semaphore;
     });
 
-    entryPointEoa = accounts[2];
+    entryPointEoa = accounts[0]; // Use a normal account as entry point for testing
     const epAsSigner = await ethers.getSigner(entryPointEoa);
 
     const factoryContract = await new SemaphoreAccountFactory__factory(
       ethersSigner
     ).deploy(entryPointEoa, semaphoreContract.address);
 
-    const walletAddress = await factoryContract.getAddress(accounts[3], 2023, 100);
+    const walletAddress = await factoryContract.getAddress(2023, 100);
 
-    await factoryContract.createAccount(accounts[3], 2023, 100);
+    await factoryContract.createAccount(2023, 100);
 
     account = SemaphoreAccount__factory.connect(walletAddress, epAsSigner);
+  });
 
+  it("should verify signature for valid semaphore proof", async () => {
     await ethersSigner.sendTransaction({
       from: accounts[0],
       to: account.address,
       value: parseEther("0.2"),
     });
+
     const callGasLimit = 200000;
     const verificationGasLimit = 100000;
     const maxFeePerGas = 3e9;
@@ -58,9 +62,9 @@ describe("#validateUserOp", () => {
       .getNetwork()
       .then((net) => net.chainId);
 
-    userOp = {
+    const userOp = {
       sender: account.address,
-      nonce: 0,
+      nonce: 1,
       initCode: "0x",
       callData: "0x",
       callGasLimit,
@@ -73,9 +77,7 @@ describe("#validateUserOp", () => {
     };
 
     userOpHash = await getUserOpHash(userOp, entryPointEoa, chainId);
-  });
 
-  it("should verify signature for valid semaphore proof", async () => {
     // Generate new semaphore identity
     const identity = new Identity();
 
@@ -108,13 +110,13 @@ describe("#validateUserOp", () => {
       }
     );
 
-    const signature = defaultAbiCoder.encode(
+    userOp.signature = defaultAbiCoder.encode(
       ["uint256[8]", "uint256"],
       [fullProof.proof, fullProof.nullifierHash]
     );
 
     const returnValue = await account.callStatic.validateUserOp(
-      { ...userOp, nonce: 1, signature },
+      userOp,
       userOpHash.toString(),
       0
     );

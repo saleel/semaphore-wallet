@@ -38,4 +38,9 @@ module.exports = {
     outDir: 'types',
     target: 'ethers-v5'
   },
+  networks: {
+    localhost: {
+      url: "http://localhost:8545",
+    }
+  }
 };

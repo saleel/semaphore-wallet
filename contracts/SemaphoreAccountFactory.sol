@@ -4,28 +4,26 @@ pragma solidity ^0.8.12;
 import "@openzeppelin/contracts/utils/Create2.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "./SemaphoreAccount.sol";
-import "hardhat/console.sol";
-
 
 contract SemaphoreAccountFactory {
     SemaphoreAccount public immutable accountImplementation;
     address public semaphoreAddress;
+    IEntryPoint entryPoint;
 
     constructor(IEntryPoint _entryPoint, address _semaphoreAddress) {
         accountImplementation = new SemaphoreAccount(_entryPoint);
+        entryPoint = _entryPoint;
 
         semaphoreAddress = _semaphoreAddress;
     }
 
     function createAccount(
-        address owner,
         uint256 groupId,
         uint256 salt
     ) public returns (SemaphoreAccount ret) {
-        address addr = getAddress(owner, groupId, salt);
+        address addr = getAddress(groupId, salt);
         uint codeSize = addr.code.length;
         if (codeSize > 0) {
-            console.log("existing");
             return SemaphoreAccount(payable(addr));
         }
         ret = SemaphoreAccount(
@@ -34,7 +32,7 @@ contract SemaphoreAccountFactory {
                     address(accountImplementation),
                     abi.encodeCall(
                         SemaphoreAccount.initialize,
-                        (owner, semaphoreAddress, groupId)
+                        (semaphoreAddress, groupId)
                     )
                 )
             )
@@ -42,7 +40,6 @@ contract SemaphoreAccountFactory {
     }
 
     function getAddress(
-        address owner,
         uint256 groupId,
         uint256 salt
     ) public view returns (address) {
@@ -56,11 +53,15 @@ contract SemaphoreAccountFactory {
                             address(accountImplementation),
                             abi.encodeCall(
                                 SemaphoreAccount.initialize,
-                                (owner, semaphoreAddress, groupId)
+                                (semaphoreAddress, groupId)
                             )
                         )
                     )
                 )
             );
+    }
+
+     function addStake(uint32 delay) external payable {
+        entryPoint.addStake{value : msg.value}(delay);
     }
 }

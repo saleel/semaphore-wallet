@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.12;
 
-/* solhint-disable avoid-low-level-calls */
-/* solhint-disable no-inline-assembly */
-/* solhint-disable reason-string */
-
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@account-abstraction/contracts/core/BaseAccount.sol";
@@ -12,22 +8,28 @@ import "./semaphore/Semaphore.sol";
 import "./semaphore/interfaces/ISemaphoreVerifier.sol";
 
 contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
-    address public owner;
-
     Semaphore public semaphore;
-
     uint256 public groupId;
-
     IEntryPoint private immutable _entryPoint;
 
     event SemaphoreAccountInitialized(
         IEntryPoint indexed entryPoint,
-        address indexed owner
+        uint256 indexed groupId
     );
 
-    modifier onlyOwner() {
-        _onlyOwner();
-        _;
+    constructor(IEntryPoint anEntryPoint) {
+        _entryPoint = anEntryPoint;
+        // _disableInitializers();
+    }
+
+    function initialize(
+        address _semaphoreAddress,
+        uint256 _groupId
+    ) public virtual initializer {
+        groupId = _groupId;
+        semaphore = Semaphore(_semaphoreAddress);
+
+        emit SemaphoreAccountInitialized(_entryPoint, _groupId);
     }
 
     function entryPoint() public view virtual override returns (IEntryPoint) {
@@ -36,25 +38,12 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
 
     receive() external payable {}
 
-    constructor(IEntryPoint anEntryPoint) {
-        _entryPoint = anEntryPoint;
-        // _disableInitializers();
-    }
-
-    function _onlyOwner() internal view {
-        //directly from EOA owner, or through the account itself (which gets redirected through execute())
-        require(
-            msg.sender == owner || msg.sender == address(this),
-            "only owner"
-        );
-    }
-
     function execute(
         address dest,
         uint256 value,
         bytes calldata func
     ) external {
-        _requireFromEntryPointOrOwner();
+        _requireFromEntryPoint();
         _call(dest, value, func);
     }
 
@@ -62,42 +51,24 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         address[] calldata dest,
         bytes[] calldata func
     ) external {
-        _requireFromEntryPointOrOwner();
+        _requireFromEntryPoint();
         require(dest.length == func.length, "wrong array lengths");
         for (uint256 i = 0; i < dest.length; i++) {
             _call(dest[i], 0, func[i]);
         }
     }
 
-    function initialize(
-        address anOwner,
-        address _semaphoreAddress,
-        uint256 _groupId
-    ) public virtual initializer {
-        _initialize(anOwner);
-        groupId = _groupId;
-        semaphore = Semaphore(_semaphoreAddress);
-    }
-
-    function _initialize(address anOwner) internal virtual {
-        owner = anOwner;
-        emit SemaphoreAccountInitialized(_entryPoint, owner);
-    }
-
-    function _requireFromEntryPointOrOwner() internal view {
-        require(
-            msg.sender == address(entryPoint()) || msg.sender == owner,
-            "account: not Owner or EntryPoint"
-        );
-    }
-
+    // Validate signature for the UserOperation
+    // ZK Proof of membership and some inputs are encoded in `signature`
     function _validateSignature(
         UserOperation calldata userOp,
         bytes32 userOpHash
     ) internal virtual override returns (uint256 validationData) {
+        // Fetch group details from Semaphore contract
         uint256 merkleTreeRoot = semaphore.getMerkleTreeRoot(groupId);
         uint256 merkleTreeDepth = semaphore.getMerkleTreeDepth(groupId);
 
+        // Decode signature
         (uint256[8] memory proof, uint256 nullifierHash) = abi.decode(
             userOp.signature,
             (uint256[8], uint256)
@@ -115,9 +86,7 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
             )
         {
             return 0; // 0 returned means signature valid as per 4337
-        } catch Error(string memory reason) {
-            return 1;
-        } catch (bytes memory reason) {
+        }  catch (bytes memory reason) {
             return 1;
         }
     }
@@ -131,36 +100,34 @@ contract SemaphoreAccount is BaseAccount, UUPSUpgradeable, Initializable {
         }
     }
 
-    /**
-     * check current account deposit in the entryPoint
-     */
-    function getDeposit() public view returns (uint256) {
-        return entryPoint().balanceOf(address(this));
-    }
+    // /**
+    //  * check current account deposit in the entryPoint
+    //  */
+    // function getDeposit() public view returns (uint256) {
+    //     return entryPoint().balanceOf(address(this));
+    // }
 
-    /**
-     * deposit more funds for this account in the entryPoint
-     */
-    function addDeposit() public payable {
-        entryPoint().depositTo{value: msg.value}(address(this));
-    }
+    // /**
+    //  * deposit more funds for this account in the entryPoint
+    //  */
+    // function addDeposit() public payable {
+    //     entryPoint().depositTo{value: msg.value}(address(this));
+    // }
 
-    /**
-     * withdraw value from the account's deposit
-     * @param withdrawAddress target to send to
-     * @param amount to withdraw
-     */
-    function withdrawDepositTo(
-        address payable withdrawAddress,
-        uint256 amount
-    ) public onlyOwner {
-        entryPoint().withdrawTo(withdrawAddress, amount);
-    }
+    // /**
+    //  * withdraw value from the account's deposit
+    //  */
+    // function withdrawDepositTo(
+    //     address payable withdrawAddress,
+    //     uint256 amount
+    // ) public onlyOwner {
+    //     entryPoint().withdrawTo(withdrawAddress, amount);
+    // }
 
     function _authorizeUpgrade(
         address newImplementation
     ) internal view override {
         (newImplementation);
-        _onlyOwner();
+        // _onlyOwner();
     }
 }
